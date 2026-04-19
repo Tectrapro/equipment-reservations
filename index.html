@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Equipment Reservations</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f5f3ee;
+    --surface: #ffffff;
+    --border: #e2dfd7;
+    --text: #1a1916;
+    --muted: #8c897f;
+    --accent: #2d5a27;
+    --accent-light: #eaf2e8;
+    --accent-mid: #c5ddc2;
+    --booked: #1a3a6b;
+    --booked-light: #e8eef7;
+    --selecting: #7a3e00;
+    --selecting-light: #fdf0e4;
+    --mono: 'DM Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 1.25rem 2rem; display: flex; align-items: baseline; gap: 1rem;
+  }
+  header h1 { font-size: 1.1rem; font-weight: 500; letter-spacing: -0.01em; }
+  header span { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+  .sync-status {
+    margin-left: auto; font-family: var(--mono); font-size: 0.7rem;
+    color: var(--muted); display: flex; align-items: center; gap: 6px;
+  }
+  .sync-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+    transition: background 0.3s;
+  }
+  .sync-dot.ok  { background: #2d5a27; }
+  .sync-dot.err { background: #c0392b; }
+  .sync-dot.loading { background: #e8b97a; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .week-nav {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.75rem 2rem; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .week-nav button {
+    background: none; border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; font-family: var(--mono); font-size: 0.75rem;
+    cursor: pointer; color: var(--text); transition: background 0.15s;
+  }
+  .week-nav button:hover { background: var(--bg); }
+  .week-label { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); min-width: 220px; }
+  .hint { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); margin-left: auto; }
+
+  .main { display: flex; height: calc(100vh - 97px); }
+
+  .sidebar {
+    width: 210px; flex-shrink: 0; border-right: 1px solid var(--border);
+    background: var(--surface); overflow-y: auto; padding: 1.25rem 0;
+  }
+  .sidebar-label {
+    font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); padding: 0 1.25rem 0.75rem;
+  }
+  .equip-btn {
+    display: flex; align-items: center; gap: 0.75rem; width: 100%;
+    padding: 0.65rem 1.25rem; background: none; border: none; cursor: pointer;
+    text-align: left; font-family: var(--sans); font-size: 0.875rem;
+    color: var(--text); border-left: 2px solid transparent; transition: all 0.12s;
+  }
+  .equip-btn:hover { background: var(--bg); }
+  .equip-btn.active {
+    background: var(--accent-light); border-left-color: var(--accent);
+    color: var(--accent); font-weight: 500;
+  }
+  .equip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  .legend { margin-top: 1.5rem; padding: 0 1.25rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--muted); }
+  .legend-pip { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+
+  .grid-area { flex: 1; overflow: auto; padding: 1.25rem 1.5rem; }
+  .grid-wrap { min-width: 700px; }
+
+  .grid-head {
+    display: grid; grid-template-columns: 60px repeat(7, 1fr);
+    gap: 3px; margin-bottom: 3px; position: sticky; top: 0;
+    background: var(--bg); padding-bottom: 4px; z-index: 2;
+  }
+  .grid-head-cell {
+    text-align: center; font-family: var(--mono);
+    font-size: 0.68rem; color: var(--muted); padding: 4px 0;
+  }
+  .grid-head-cell strong { display: block; font-size: 0.78rem; color: var(--text); font-weight: 500; }
+  .grid-head-cell.today strong { color: var(--accent); }
+
+  .slot-row { display: grid; grid-template-columns: 60px repeat(7, 1fr); gap: 3px; margin-bottom: 3px; }
+  .time-col {
+    font-family: var(--mono); font-size: 0.62rem; color: var(--muted);
+    text-align: right; padding-right: 8px; padding-top: 9px; white-space: nowrap;
+  }
+  .slot {
+    height: 38px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); cursor: pointer; display: flex; align-items: center;
+    justify-content: center; font-size: 0.68rem; color: var(--muted);
+    transition: all 0.08s; overflow: hidden; padding: 0 4px;
+    text-align: center; line-height: 1.2; user-select: none;
+  }
+  .slot:hover { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+  .slot.booked {
+    background: var(--booked-light); border-color: #b8c9e0;
+    color: var(--booked); cursor: default; font-weight: 500;
+  }
+  .slot.booked:hover { background: var(--booked-light); border-color: #b8c9e0; color: var(--booked); }
+  .slot.mine {
+    background: var(--accent-light); border-color: var(--accent-mid);
+    color: var(--accent); cursor: pointer; font-weight: 500;
+  }
+  .slot.mine:hover { background: #d4ebd0; }
+  .slot.selecting {
+    background: var(--selecting-light); border-color: #e8b97a;
+    color: var(--selecting); font-weight: 500;
+  }
+  .slot.past {
+    background: var(--bg); border-color: var(--border);
+    color: var(--border); cursor: not-allowed;
+  }
+  .slot.past:hover { background: var(--bg); border-color: var(--border); color: var(--border); }
+  .slot.disabled { opacity: 0.5; cursor: wait; pointer-events: none; }
+
+  /* Modal */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0;
+    background: rgba(26,25,22,0.45); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; width: 440px; max-width: 92vw;
+    padding: 1.75rem; animation: pop 0.18s ease;
+  }
+  @keyframes pop { from{transform:scale(0.95);opacity:0} to{transform:scale(1);opacity:1} }
+  .modal-equip {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.2rem;
+  }
+  .modal-slot { font-size: 1.05rem; font-weight: 500; margin-bottom: 1.25rem; letter-spacing: -0.01em; }
+  .modal-cancel-note { font-size: 0.78rem; color: var(--muted); margin-bottom: 1rem; font-style: italic; }
+  .field { margin-bottom: 1rem; }
+  .field label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.3rem; font-family: var(--mono); }
+  .field input, .field textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 5px;
+    font-family: var(--sans); font-size: 0.875rem; color: var(--text);
+    background: var(--bg); outline: none; transition: border 0.12s;
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); background: var(--surface); }
+  .field textarea { resize: vertical; min-height: 68px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1.25rem; }
+  .btn {
+    padding: 8px 18px; border-radius: 5px; font-family: var(--sans); font-size: 0.875rem;
+    cursor: pointer; border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); transition: all 0.12s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .btn.primary:hover { background: #234a1e; }
+  .btn.danger { background: #c0392b; color: #fff; border-color: transparent; }
+  .btn.danger:hover { background: #a93226; }
+  .btn:disabled { opacity: 0.5; cursor: wait; }
+
+  .toast {
+    position: fixed; bottom: 1.5rem; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: #fff;
+    padding: 10px 20px; border-radius: 99px; font-size: 0.85rem;
+    opacity: 0; transition: all 0.25s; z-index: 200; pointer-events: none; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.error { background: #c0392b; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Equipment Reservations</h1>
+  <span>TTP workspace &amp; conference booking</span>
+  <div class="sync-status">
+    <div class="sync-dot loading" id="sync-dot"></div>
+    <span id="sync-label">Connecting...</span>
+  </div>
+</header>
+
+<div class="week-nav">
+  <button onclick="shiftWeek(-1)">&#8592; Prev</button>
+  <div class="week-label" id="week-label"></div>
+  <button onclick="shiftWeek(1)">Next &#8594;</button>
+  <button onclick="shiftWeek(0)" style="margin-left:auto">Today</button>
+  <span class="hint">Click start slot, then end slot to select a range</span>
+</div>
+
+<div class="main">
+  <nav class="sidebar">
+    <div class="sidebar-label">Equipment</div>
+    <div id="equip-list"></div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-pip" style="background:#fff;border:1px solid #e2dfd7"></div> Available</div>
+      <div class="legend-item"><div class="legend-pip" style="background:#fdf0e4;border:1px solid #e8b97a"></div> Selecting</div>
+      <div class="legend-item"><div class="legend-pip" style="background:#e8eef7;border:1px solid #b8c9e0"></div> Booked</div>
+      <div class="legend-item"><div class="legend-pip" style="background:#eaf2e8;border:1px solid #c5ddc2"></div> Your booking</div>
+      <div class="legend-item"><div class="legend-pip" style="background:#f5f3ee;border:1px solid #e2dfd7;opacity:0.5"></div> Past</div>
+    </div>
+    <div style="padding:1.5rem 1.25rem 0; font-family:var(--mono); font-size:0.65rem; color:var(--muted); line-height:1.6;">
+      Click your own booking to cancel it.
+    </div>
+  </nav>
+
+  <div class="grid-area">
+    <div class="grid-wrap">
+      <div class="grid-head" id="grid-head"></div>
+      <div id="slot-grid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Book modal -->
+<div class="modal-backdrop" id="modal-book" onclick="closeModalBackdrop(event,'modal-book')">
+  <div class="modal">
+    <div class="modal-equip" id="modal-equip"></div>
+    <div class="modal-slot" id="modal-slot"></div>
+    <div class="field">
+      <label>Your name</label>
+      <input type="text" id="f-name" placeholder="e.g. Alex Torres" />
+    </div>
+    <div class="field">
+      <label>Purpose / notes</label>
+      <textarea id="f-purpose" placeholder="e.g. Sprint planning session"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="btn-cancel-book" onclick="cancelModal('modal-book')">Cancel</button>
+      <button class="btn primary" id="btn-confirm-book" onclick="confirmBooking()">Reserve slots</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel modal -->
+<div class="modal-backdrop" id="modal-cancel" onclick="closeModalBackdrop(event,'modal-cancel')">
+  <div class="modal">
+    <div class="modal-equip" id="cancel-equip"></div>
+    <div class="modal-slot" id="cancel-slot"></div>
+    <p class="modal-cancel-note">This will release the slot for others to book.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="cancelModal('modal-cancel')">Keep it</button>
+      <button class="btn danger" id="btn-confirm-cancel" onclick="confirmCancel()">Cancel reservation</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+//  CONFIGURATION — paste your Apps Script Web App URL below
+// ─────────────────────────────────────────────────────────────
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyqHfa7igHSHxDRkSZ6cF_Cw6T8uXxIqKNT5IYkT2jp2lbFj84jnL3pnOMg5lgLuqKHhw/exec';
+// ─────────────────────────────────────────────────────────────
+
+const EQUIPMENT = [
+  { name: 'TTP_WS11',      color: '#2d5a27' },
+  { name: 'TTP_WS12',      color: '#1a3a6b' },
+  { name: 'TTP_WS13',      color: '#7a3e00' },
+  { name: 'TTP_Conference', color: '#5a1a5a' },
+];
+
+const HOURS = Array.from({ length: 24 }, (_, i) => {
+  const ampm = i < 12 ? 'AM' : 'PM';
+  const h = i === 0 ? 12 : i > 12 ? i - 12 : i;
+  return `${h}:00 ${ampm}`;
+});
+
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+let currentEquip = 0;
+let weekOffset   = 0;
+let anchorSlot   = null; // { ti, dateStr }
+let cancelTarget = null; // { key, equipment }
+
+// Local cache: bookings[equipIdx][key] = { name, purpose, mine }
+// key = "YYYY-MM-DD|HH"
+const bookings = EQUIPMENT.map(() => ({}));
+
+// Track the current user's session name so we can identify "mine"
+let myName = localStorage.getItem('ttp_username') || null;
+
+// ── API helpers ───────────────────────────────────────────────
+async function apiCall(params) {
+  setSyncState('loading');
+  const url = SCRIPT_URL + '?' + new URLSearchParams(params).toString();
+  const res  = await fetch(url);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  setSyncState('ok');
+  return data;
+}
+
+function setSyncState(state) {
+  const dot   = document.getElementById('sync-dot');
+  const label = document.getElementById('sync-label');
+  dot.className = 'sync-dot ' + state;
+  label.textContent = state === 'ok' ? 'Synced' : state === 'err' ? 'Offline' : 'Syncing...';
+}
+
+// ── Load all bookings from the sheet ─────────────────────────
+async function loadBookings() {
+  if (SCRIPT_URL === 'YOUR_APPS_SCRIPT_URL_HERE') {
+    setSyncState('err');
+    document.getElementById('sync-label').textContent = 'No URL configured';
+    return;
+  }
+  try {
+    const data = await apiCall({ action: 'getAll' });
+    // Clear and reload
+    EQUIPMENT.forEach((_, i) => { bookings[i] = {}; });
+    for (const b of data.bookings) {
+      const equipIdx = EQUIPMENT.findIndex(e => e.name === b.equipment);
+      if (equipIdx < 0) continue;
+      bookings[equipIdx][b.key] = {
+        name:    b.name,
+        purpose: b.purpose,
+        mine:    (myName && b.name === myName)
+      };
+    }
+    renderGrid();
+  } catch (err) {
+    setSyncState('err');
+    showToast('Could not load bookings: ' + err.message, true);
+  }
+}
+
+// Auto-refresh every 30 seconds
+setInterval(loadBookings, 30000);
+
+// ── Key helpers ───────────────────────────────────────────────
+function dateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function slotKey(ti, d) {
+  return `${dateStr(d)}|${String(ti).padStart(2,'0')}`;
+}
+
+// ── Week helpers ──────────────────────────────────────────────
+function getWeekDates() {
+  const now = new Date();
+  const sun = new Date(now);
+  sun.setHours(0,0,0,0);
+  sun.setDate(now.getDate() - now.getDay() + weekOffset * 7);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(sun);
+    d.setDate(sun.getDate() + i);
+    return d;
+  });
+}
+function fmt(d) {
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function isToday(d) {
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() &&
+         d.getMonth()    === now.getMonth()    &&
+         d.getDate()     === now.getDate();
+}
+
+// ── Selection range ───────────────────────────────────────────
+function selectionRange(anchor, end, dates) {
+  const tiMin = Math.min(anchor.ti, end.ti), tiMax = Math.max(anchor.ti, end.ti);
+  const anchorDi = dates.findIndex(d => dateStr(d) === anchor.dateStr);
+  const endDi    = dates.findIndex(d => dateStr(d) === end.dateStr);
+  if (anchorDi < 0 || endDi < 0) return [];
+  const diMin = Math.min(anchorDi, endDi), diMax = Math.max(anchorDi, endDi);
+  const keys = [];
+  for (let ti = tiMin; ti <= tiMax; ti++)
+    for (let di = diMin; di <= diMax; di++)
+      keys.push(slotKey(ti, dates[di]));
+  return keys;
+}
+
+// ── Render ────────────────────────────────────────────────────
+function renderSidebar() {
+  document.getElementById('equip-list').innerHTML = EQUIPMENT.map((e, i) =>
+    `<button class="equip-btn ${i === currentEquip ? 'active' : ''}" onclick="selectEquip(${i})">
+      <span class="equip-dot" style="background:${e.color}"></span>
+      ${e.name}
+    </button>`
+  ).join('');
+}
+
+function renderGrid() {
+  const dates = getWeekDates();
+  document.getElementById('week-label').textContent =
+    `${fmt(dates[0])} – ${fmt(dates[6])}, ${dates[0].getFullYear()}`;
+
+  document.getElementById('grid-head').innerHTML =
+    '<div></div>' + dates.map((d, i) =>
+      `<div class="grid-head-cell ${isToday(d) ? 'today' : ''}">
+        <strong>${DAYS[i]}</strong>${fmt(d)}
+      </div>`
+    ).join('');
+
+  const bk  = bookings[currentEquip];
+  const now  = new Date();
+
+  let selectedKeys = new Set();
+  if (anchorSlot) {
+    const anchorDi = dates.findIndex(d => dateStr(d) === anchorSlot.dateStr);
+    if (anchorDi >= 0) selectedKeys = new Set([slotKey(anchorSlot.ti, dates[anchorDi])]);
+  }
+
+  document.getElementById('slot-grid').innerHTML = HOURS.map((t, ti) =>
+    `<div class="slot-row">
+      <div class="time-col">${t}</div>
+      ${dates.map((d) => {
+        const key = slotKey(ti, d);
+        const ds  = dateStr(d);
+        const b   = bk[key];
+        const slotTime = new Date(d); slotTime.setHours(ti,0,0,0);
+        const isPast = slotTime < now;
+
+        let cls = 'slot', label = '', click = '';
+        if (isPast && !b) {
+          cls = 'slot past'; label = '—';
+        } else if (b) {
+          cls   = b.mine ? 'slot mine' : 'slot booked';
+          label = b.name;
+          if (b.mine) click = `onclick="openCancelModal('${key}','${ds}',${ti})"`;
+        } else if (selectedKeys.has(key)) {
+          cls = 'slot selecting'; label = 'Start';
+          click = `onclick="slotClick(${ti},'${ds}')"`;
+        } else {
+          label = '+';
+          click = `onclick="slotClick(${ti},'${ds}')"`;
+        }
+        return `<div class="${cls}" ${click}>${label}</div>`;
+      }).join('')}
+    </div>`
+  ).join('');
+}
+
+// ── Interaction ───────────────────────────────────────────────
+function selectEquip(i) {
+  currentEquip = i; anchorSlot = null;
+  renderSidebar(); renderGrid();
+}
+
+function shiftWeek(n) {
+  weekOffset = n === 0 ? 0 : weekOffset + n;
+  anchorSlot = null; renderGrid();
+}
+
+function slotClick(ti, ds) {
+  const dates = getWeekDates();
+  const d = dates.find(d => dateStr(d) === ds);
+  const slotTime = new Date(d); slotTime.setHours(ti,0,0,0);
+  if (slotTime < new Date()) return;
+
+  const key = slotKey(ti, d);
+  const bk  = bookings[currentEquip];
+  if (bk[key]) return;
+
+  if (!anchorSlot) {
+    anchorSlot = { ti, dateStr: ds }; renderGrid();
+  } else {
+    const endSlot = { ti, dateStr: ds };
+    const range   = selectionRange(anchorSlot, endSlot, dates);
+    const conflict = range.find(k => bk[k]);
+    if (conflict) {
+      showToast('One or more slots in that range are already booked.', true);
+      anchorSlot = null; renderGrid(); return;
+    }
+    openBookModal(range, anchorSlot, endSlot, dates);
+  }
+}
+
+// ── Book modal ────────────────────────────────────────────────
+function openBookModal(range, start, end, dates) {
+  const tiMin = Math.min(start.ti, end.ti), tiMax = Math.max(start.ti, end.ti);
+  const startDi = dates.findIndex(d => dateStr(d) === start.dateStr);
+  const endDi   = dates.findIndex(d => dateStr(d) === end.dateStr);
+  const diMin = Math.min(startDi, endDi), diMax = Math.max(startDi, endDi);
+
+  const startLabel = `${DAYS[diMin]} ${fmt(dates[diMin])}, ${HOURS[tiMin]}`;
+  const endLabel   = (tiMax === tiMin && diMin === diMax) ? '' :
+    ` → ${DAYS[diMax]} ${fmt(dates[diMax])}, ${HOURS[tiMax]}`;
+
+  document.getElementById('modal-equip').textContent = EQUIPMENT[currentEquip].name;
+  document.getElementById('modal-slot').textContent  = `${startLabel}${endLabel}`;
+  document.getElementById('f-name').value    = myName || '';
+  document.getElementById('f-purpose').value = '';
+  document.getElementById('modal-book')._pendingRange = range;
+  document.getElementById('modal-book').classList.add('open');
+  setTimeout(() => {
+    const inp = document.getElementById('f-name');
+    if (!inp.value) inp.focus(); else document.getElementById('f-purpose').focus();
+  }, 100);
+}
+
+async function confirmBooking() {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { document.getElementById('f-name').focus(); return; }
+  const purpose = document.getElementById('f-purpose').value.trim();
+  const range   = document.getElementById('modal-book')._pendingRange;
+  const equip   = EQUIPMENT[currentEquip].name;
+
+  setModalBusy('modal-book', true);
+  try {
+    await apiCall({ action: 'add', equipment: equip, keys: range.join(','), name, purpose });
+    myName = name;
+    localStorage.setItem('ttp_username', name);
+    // Optimistic update
+    const bk = bookings[currentEquip];
+    range.forEach(k => { bk[k] = { name, purpose, mine: true }; });
+    anchorSlot = null;
+    document.getElementById('modal-book').classList.remove('open');
+    renderGrid();
+    showToast(`Reserved ${range.length} slot${range.length > 1 ? 's' : ''} on ${equip}`);
+    // Full refresh in background
+    setTimeout(loadBookings, 1000);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+  setModalBusy('modal-book', false);
+}
+
+// ── Cancel modal ──────────────────────────────────────────────
+function openCancelModal(key, ds, ti) {
+  const dates = getWeekDates();
+  const di = dates.findIndex(d => dateStr(d) === ds);
+  document.getElementById('cancel-equip').textContent = EQUIPMENT[currentEquip].name;
+  document.getElementById('cancel-slot').textContent  =
+    `${di >= 0 ? DAYS[di] + ' ' + fmt(dates[di]) : ds}, ${HOURS[ti]}`;
+  cancelTarget = { key, equipment: EQUIPMENT[currentEquip].name };
+  document.getElementById('modal-cancel').classList.add('open');
+}
+
+async function confirmCancel() {
+  if (!cancelTarget) return;
+  setModalBusy('modal-cancel', true);
+  try {
+    await apiCall({ action: 'remove', key: cancelTarget.key, equipment: cancelTarget.equipment });
+    const equipIdx = EQUIPMENT.findIndex(e => e.name === cancelTarget.equipment);
+    if (equipIdx >= 0) delete bookings[equipIdx][cancelTarget.key];
+    cancelTarget = null;
+    document.getElementById('modal-cancel').classList.remove('open');
+    renderGrid();
+    showToast('Reservation cancelled.');
+    setTimeout(loadBookings, 1000);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+  setModalBusy('modal-cancel', false);
+}
+
+// ── Shared modal helpers ──────────────────────────────────────
+function closeModalBackdrop(e, id) {
+  if (e.target.id === id) cancelModal(id);
+}
+function cancelModal(id) {
+  if (id === 'modal-book') anchorSlot = null;
+  if (id === 'modal-cancel') cancelTarget = null;
+  document.getElementById(id).classList.remove('open');
+  renderGrid();
+}
+function setModalBusy(id, busy) {
+  document.getElementById(id).querySelectorAll('button').forEach(b => b.disabled = busy);
+}
+
+// ── Toast ─────────────────────────────────────────────────────
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isError ? ' error' : '');
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Boot ──────────────────────────────────────────────────────
+renderSidebar();
+renderGrid();
+loadBookings();
+</script>
+</body>
+</html>
