@@ -184,6 +184,32 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: #c0392b; }
+
+  /* Batch cancel mode */
+  body.batch-mode .slot.mine  { cursor: crosshair; }
+  body.batch-mode .slot.mine:hover { background: #fde8e8; border-color: #e0a0a0; color: #a93226; }
+  .slot.batch-marked {
+    background: #fde8e8 !important; border-color: #c0392b !important;
+    color: #a93226 !important; font-weight: 500;
+  }
+  .batch-bar {
+    display: none; position: fixed; bottom: 0; left: 0; right: 0;
+    background: #c0392b; color: #fff; z-index: 150;
+    padding: 0.85rem 2rem; align-items: center; gap: 1rem;
+    font-family: var(--mono); font-size: 0.8rem;
+  }
+  .batch-bar.visible { display: flex; }
+  .batch-bar span { flex: 1; }
+  .batch-bar button {
+    padding: 6px 16px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.4);
+    font-family: var(--mono); font-size: 0.75rem; cursor: pointer;
+    background: rgba(255,255,255,0.15); color: #fff; transition: background 0.12s;
+  }
+  .batch-bar button:hover { background: rgba(255,255,255,0.3); }
+  .batch-bar button.confirm { background: #fff; color: #c0392b; border-color: #fff; }
+  .batch-bar button.confirm:hover { background: #f5f5f5; }
+  .btn.batch-toggle { border-color: #c0392b; color: #c0392b; }
+  .btn.batch-toggle.active { background: #c0392b; color: #fff; border-color: #c0392b; }
 </style>
 </head>
 <body>
@@ -202,7 +228,8 @@
   <div class="week-label" id="week-label"></div>
   <button onclick="shiftWeek(1)">Next &#8594;</button>
   <button onclick="shiftWeek(0)" style="margin-left:auto">Today</button>
-  <span class="hint">Click start slot, then end slot to select a range</span>
+  <span class="hint" id="nav-hint">Click start slot, then end slot to select a range</span>
+  <button class="btn batch-toggle" id="btn-batch" onclick="toggleBatchMode()" title="Select multiple bookings to cancel at once">Batch cancel</button>
 </div>
 
 <div class="main">
@@ -216,8 +243,8 @@
       <div class="legend-item"><div class="legend-pip" style="background:#eaf2e8;border:1px solid #c5ddc2"></div> Your booking</div>
       <div class="legend-item"><div class="legend-pip" style="background:#f5f3ee;border:1px solid #e2dfd7;opacity:0.5"></div> Past</div>
     </div>
-    <div style="padding:1.5rem 1.25rem 0; font-family:var(--mono); font-size:0.65rem; color:var(--muted); line-height:1.6;">
-      Click your own booking to cancel it.
+    <div style="padding:1.5rem 1.25rem 0; font-family:var(--mono); font-size:0.65rem; color:var(--muted); line-height:1.6;" id="sidebar-tip">
+      Click your own booking to cancel it, or use <strong>Batch cancel</strong> to remove multiple at once.
     </div>
   </nav>
 
@@ -262,13 +289,19 @@
   </div>
 </div>
 
+<div class="batch-bar" id="batch-bar">
+  <span id="batch-count">0 slots selected</span>
+  <button onclick="clearBatchSelection()">Clear</button>
+  <button onclick="toggleBatchMode()">Exit</button>
+  <button class="confirm" onclick="confirmBatchCancel()">Cancel selected slots</button>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
 // ─────────────────────────────────────────────────────────────
 //  CONFIGURATION — paste your Apps Script Web App URL below
 // ─────────────────────────────────────────────────────────────
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyqHfa7igHSHxDRkSZ6cF_Cw6T8uXxIqKNT5IYkT2jp2lbFj84jnL3pnOMg5lgLuqKHhw/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxquE-YBj-_XeAGL9eCW3ce3gDhudMl_rPK5HsVEi8sNoRbsXZwsHL042eHVNRGN3gkeA/exec';
 // ─────────────────────────────────────────────────────────────
 
 const EQUIPMENT = [
@@ -289,7 +322,9 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let currentEquip = 0;
 let weekOffset   = 0;
 let anchorSlot   = null; // { ti, dateStr }
-let cancelTarget = null; // { key, equipment }
+let cancelTarget   = null; // { key, equipment }
+let batchMode      = false;
+let batchSelected  = new Set(); // set of slot keys marked for batch cancel
 
 // Local cache: bookings[equipIdx][key] = { name, purpose, mine }
 // key = "YYYY-MM-DD|HH"
@@ -301,10 +336,32 @@ let myName = localStorage.getItem('ttp_username') || null;
 // ── API helpers ───────────────────────────────────────────────
 async function apiCall(params) {
   setSyncState('loading');
+  // Google Apps Script redirects POST to GET internally; using fetch with
+  // redirect:'follow' and no-cors breaks JSON parsing. The fix: always GET
+  // with params in the URL, and tell the script to set CORS headers via a
+  // callback param so we always receive plain JSON (not an HTML redirect page).
   const url = SCRIPT_URL + '?' + new URLSearchParams(params).toString();
-  const res  = await fetch(url);
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
+  let res;
+  try {
+    res = await fetch(url, { redirect: 'follow' });
+  } catch (e) {
+    setSyncState('err');
+    throw new Error('Network error — check your connection.');
+  }
+  // If the response is not ok or is HTML, surface a clear message
+  const text = await res.text();
+  if (text.trim().startsWith('<')) {
+    setSyncState('err');
+    throw new Error('Apps Script returned an error page. Check your deployment URL and make sure "Who has access" is set to Anyone.');
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    setSyncState('err');
+    throw new Error('Could not parse response from Apps Script: ' + text.slice(0, 80));
+  }
+  if (data.error) { setSyncState('err'); throw new Error(data.error); }
   setSyncState('ok');
   return data;
 }
@@ -435,9 +492,14 @@ function renderGrid() {
         if (isPast && !b) {
           cls = 'slot past'; label = '—';
         } else if (b) {
-          cls   = b.mine ? 'slot mine' : 'slot booked';
+          const isMarked = batchSelected.has(key);
+          cls   = b.mine ? (isMarked ? 'slot batch-marked' : 'slot mine') : 'slot booked';
           label = b.name;
-          if (b.mine) click = `onclick="openCancelModal('${key}','${ds}',${ti})"`;
+          if (b.mine) {
+            click = batchMode
+              ? `onclick="toggleBatchSlot('${key}')"`
+              : `onclick="openCancelModal('${key}','${ds}',${ti})"`;
+          }
         } else if (selectedKeys.has(key)) {
           cls = 'slot selecting'; label = 'Start';
           click = `onclick="slotClick(${ti},'${ds}')"`;
@@ -454,6 +516,7 @@ function renderGrid() {
 // ── Interaction ───────────────────────────────────────────────
 function selectEquip(i) {
   currentEquip = i; anchorSlot = null;
+  if (batchMode) { batchSelected.clear(); updateBatchBar(); }
   renderSidebar(); renderGrid();
 }
 
@@ -463,6 +526,7 @@ function shiftWeek(n) {
 }
 
 function slotClick(ti, ds) {
+  if (batchMode) return; // in batch mode only mine-slot clicks are active
   const dates = getWeekDates();
   const d = dates.find(d => dateStr(d) === ds);
   const slotTime = new Date(d); slotTime.setHours(ti,0,0,0);
@@ -563,6 +627,75 @@ async function confirmCancel() {
     showToast(err.message, true);
   }
   setModalBusy('modal-cancel', false);
+}
+
+// ── Batch cancel ─────────────────────────────────────────────
+function toggleBatchMode() {
+  batchMode = !batchMode;
+  batchSelected.clear();
+  document.body.classList.toggle('batch-mode', batchMode);
+  document.getElementById('btn-batch').classList.toggle('active', batchMode);
+  document.getElementById('batch-bar').classList.toggle('visible', batchMode);
+  document.getElementById('nav-hint').textContent = batchMode
+    ? 'Click your green bookings to mark them for removal'
+    : 'Click start slot, then end slot to select a range';
+  anchorSlot = null;
+  updateBatchBar();
+  renderGrid();
+}
+
+function toggleBatchSlot(key) {
+  if (!batchMode) return;
+  const bk = bookings[currentEquip];
+  if (!bk[key] || !bk[key].mine) return;
+  if (batchSelected.has(key)) batchSelected.delete(key);
+  else batchSelected.add(key);
+  updateBatchBar();
+  renderGrid();
+}
+
+function clearBatchSelection() {
+  batchSelected.clear();
+  updateBatchBar();
+  renderGrid();
+}
+
+function updateBatchBar() {
+  const n = batchSelected.size;
+  document.getElementById('batch-count').textContent =
+    n === 0 ? 'No slots selected — click your bookings to mark them'
+            : `${n} slot${n > 1 ? 's' : ''} selected for cancellation`;
+}
+
+async function confirmBatchCancel() {
+  if (batchSelected.size === 0) {
+    showToast('No slots selected.', true); return;
+  }
+  const equip = EQUIPMENT[currentEquip].name;
+  const keys  = [...batchSelected];
+  document.getElementById('batch-bar').querySelectorAll('button').forEach(b => b.disabled = true);
+  setSyncState('loading');
+  let failed = 0;
+  for (const key of keys) {
+    try {
+      await apiCall({ action: 'remove', key, equipment: equip });
+      delete bookings[currentEquip][key];
+      batchSelected.delete(key);
+    } catch (err) {
+      failed++;
+    }
+  }
+  document.getElementById('batch-bar').querySelectorAll('button').forEach(b => b.disabled = false);
+  const removed = keys.length - failed;
+  showToast(
+    failed === 0
+      ? `Cancelled ${removed} slot${removed > 1 ? 's' : ''} successfully.`
+      : `Cancelled ${removed}, failed to cancel ${failed}.`,
+    failed > 0
+  );
+  updateBatchBar();
+  renderGrid();
+  setTimeout(loadBookings, 1000);
 }
 
 // ── Shared modal helpers ──────────────────────────────────────
